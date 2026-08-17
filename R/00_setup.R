@@ -178,6 +178,32 @@ if (!biomass_cache_available) {
   )
 }
 
+soc_file <- file.path(
+  out_dir,
+  paste0(
+    "soc_custom_FABLE_",
+    soc_version,
+    ".rds"
+  )
+)
+
+biomass_above_file <- file.path(
+  out_dir,
+  paste0(
+    "biomass_aboveground_custom_FABLE_",
+    biomass_version,
+    ".rds"
+  )
+)
+
+biomass_below_file <- file.path(
+  out_dir,
+  paste0(
+    "biomass_belowground_custom_FABLE_",
+    biomass_version,
+    ".rds"
+  )
+)
 
 # ============================================================
 # 8. Setup summary
@@ -192,8 +218,11 @@ cat(
   "Local madrat directory:   ", madrat_root, "\n",
   "SOC version:              ", soc_version, "\n",
   "SOC cache found:          ", soc_cache_available, "\n",
+  "SOC RDS:                  ", soc_file, "\n",
   "Biomass version:          ", biomass_version, "\n",
   "Biomass cache found:      ", biomass_cache_available, "\n",
+  "Aboveground RDS:          ", biomass_above_file, "\n",
+  "Belowground RDS:          ", biomass_below_file, "\n",
   "============================================================\n\n",
   sep = ""
 )
