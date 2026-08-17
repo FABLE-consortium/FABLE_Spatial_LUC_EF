@@ -3,4 +3,11 @@
 .RData
 .Ruserdata
 
+# Large local madrat source data
+madrat_data/
+
+# Precomputed caches
 cache/
+
+# Generated outputs
+output/
