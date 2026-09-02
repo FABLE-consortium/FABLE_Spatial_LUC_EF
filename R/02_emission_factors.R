@@ -23,9 +23,10 @@ source(here::here("R", "00_setup.R"))
 # Set to character(0) to skip country-specific maps.
 
 countries_to_map <- c(
-  "IND",
-  "BRA",
-  "ZAF"
+  # "IND",
+  # "BRA",
+  # "ZAF",
+  "UZB"
 )
 
 
