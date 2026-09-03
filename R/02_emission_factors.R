@@ -13,6 +13,7 @@
 
 source(here::here("R", "00_setup.R"))
 
+
 # ============================================================
 # User mapping options
 # ============================================================
@@ -262,6 +263,128 @@ stopifnot(
 
 
 # ============================================================
+# 4.a Prepare ESA-CCI 2010 land-cover areas
+# ============================================================
+
+# ESA-CCI 2010 land-cover areas are used to weight the
+# land-cover-specific carbon stocks when calculating ecoregion
+# and national carbon-stock averages.
+#
+# The original ESA-CCI classes are first mapped to the FABLE
+# land-cover classes using mapping_code.xlsx.
+
+
+
+
+mapping_file <- here::here(
+  "data",
+  "mapping_code.xlsx"
+)
+
+if (!file.exists(mapping_file)) {
+  stop(
+    "\nmapping_code.xlsx not found:\n",
+    mapping_file
+  )
+}
+
+
+map_ESACCI <- readxl::read_excel(
+  mapping_file,
+  sheet = "ESACCI"
+)
+
+esa_lc_file <- here::here(
+  "data",
+  "FABLE_ESA_CCI_LandCover_2010.csv"
+)
+
+if (!file.exists(esa_lc_file)) {
+  stop(
+    "\nESA-CCI 2010 land-cover-area file not found:\n",
+    esa_lc_file
+  )
+}
+
+
+esa_lc_2010 <- readr::read_csv(esa_lc_file)%>%
+  mutate(
+    id_c = as.character(id_c)
+  )
+
+
+
+# ------------------------------------------------------------
+# Convert ESA-CCI land-cover data from wide to long
+# ------------------------------------------------------------
+
+esa_lc_2010_long <- esa_lc_2010 %>%
+  mutate(
+    id_c = as.character(id_c)
+  ) %>%
+  select(
+    -any_of(c(
+      "system:index",
+      ".geo"
+    ))
+  ) %>%
+  pivot_longer(
+    cols = -id_c,
+    names_to = "code",
+    values_to = "area"
+  ) %>%
+  mutate(
+    code = as.character(code),
+    area = as.numeric(area)
+  )
+
+
+# ------------------------------------------------------------
+# Map ESA-CCI classes to FABLE land-cover classes
+# ------------------------------------------------------------
+
+esa_lc_2010_long <- esa_lc_2010_long %>%
+  left_join(
+    map_ESACCI %>%
+      mutate(
+        code = as.character(code)
+      ),
+    by = "code"
+  )
+# ------------------------------------------------------------
+# Aggregate ESA-CCI classes to FABLE land-cover classes
+# ------------------------------------------------------------
+
+esa_lc_2010_fable <- esa_lc_2010_long %>%
+  filter(
+    !is.na(LandCover),
+    LandCover %in% c(
+      "cropland",
+      "pasture",
+      "forest",
+      "otherland",
+      "urban"
+    )
+  ) %>%
+  group_by(
+    id_c,
+    LandCover
+  ) %>%
+  summarise(
+    area = sum(
+      area,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = LandCover,
+    values_from = area,
+    names_prefix = "area_",
+    values_fill = 0
+  )
+
+# ============================================================
 # 5. Build multilayer carbon raster
 # ============================================================
 
@@ -350,6 +473,7 @@ time_grid50 <- system.time({
   
 })
 
+
 print(
   time_grid50
 )
@@ -367,6 +491,19 @@ grid50 <- cbind(
   carbon_50
 )
 
+
+# ============================================================
+# 6.a Add ESA-CCI 2010 land-cover areas
+# ============================================================
+
+grid50 <- grid50 %>%
+  mutate(
+    id_c = as.character(id_c)
+  ) %>%
+  left_join(
+    esa_lc_2010_fable,
+    by = "id_c"
+  )
 
 # ============================================================
 # 7. Total biomass carbon stocks
@@ -660,10 +797,32 @@ ef_cols <- c(
   "biomass_below_urban"
 )
 
-
 # ============================================================
 # 12. Aggregate to ecoregion level
 # ============================================================
+
+# ------------------------------------------------------------
+# Helper for land-cover-area-weighted mean
+# ------------------------------------------------------------
+
+weighted_mean_lc <- function(x, w) {
+  
+  valid <- !is.na(x) &
+    !is.na(w) &
+    w > 0
+  
+  if (!any(valid)) {
+    return(NA_real_)
+  }
+  
+  weighted.mean(
+    x[valid],
+    w[valid]
+  )
+}
+
+# ESA-CCI 2010 land-cover area is used as the weight for
+# each land-cover-specific carbon stock.
 
 grid_eco <- grid50 %>%
   group_by(
@@ -671,43 +830,266 @@ grid_eco <- grid50 %>%
     ECO_NAME
   ) %>%
   summarise(
-    across(
-      all_of(
-        ef_cols
+    
+    # --------------------------------------------------------
+    # SOC
+    # --------------------------------------------------------
+    
+    weighted_soc_cropland =
+      weighted_mean_lc(
+        soc_cropland,
+        area_cropland
       ),
-      ~ weighted.mean(
-        .x,
+    
+    weighted_soc_pasture =
+      weighted_mean_lc(
+        soc_pasture,
+        area_pasture
+      ),
+    
+    # soc_other does not correspond to a single FABLE
+    # land-cover class, so keep the original cell-area weighting.
+    
+    weighted_soc_other =
+      weighted.mean(
+        soc_other,
         area,
         na.rm = TRUE
       ),
-      .names = "weighted_{.col}"
-    ),
+    
+    
+    # --------------------------------------------------------
+    # Aboveground biomass
+    # --------------------------------------------------------
+    
+    weighted_biomass_above_cropland =
+      weighted_mean_lc(
+        biomass_above_cropland,
+        area_cropland
+      ),
+    
+    weighted_biomass_above_pasture =
+      weighted_mean_lc(
+        biomass_above_pasture,
+        area_pasture
+      ),
+    
+    weighted_biomass_above_forest =
+      weighted_mean_lc(
+        biomass_above_forest,
+        area_forest
+      ),
+    
+    weighted_biomass_above_otherland =
+      weighted_mean_lc(
+        biomass_above_otherland,
+        area_otherland
+      ),
+    
+    weighted_biomass_above_other =
+      weighted.mean(
+        biomass_above_other,
+        area,
+        na.rm = TRUE
+      ),
+    
+    weighted_biomass_above_urban =
+      weighted_mean_lc(
+        biomass_above_urban,
+        area_urban
+      ),
+    
+    
+    # --------------------------------------------------------
+    # Belowground biomass
+    # --------------------------------------------------------
+    
+    weighted_biomass_below_cropland =
+      weighted_mean_lc(
+        biomass_below_cropland,
+        area_cropland
+      ),
+    
+    weighted_biomass_below_pasture =
+      weighted_mean_lc(
+        biomass_below_pasture,
+        area_pasture
+      ),
+    
+    weighted_biomass_below_forest =
+      weighted_mean_lc(
+        biomass_below_forest,
+        area_forest
+      ),
+    
+    weighted_biomass_below_otherland =
+      weighted_mean_lc(
+        biomass_below_otherland,
+        area_otherland
+      ),
+    
+    weighted_biomass_below_other =
+      weighted.mean(
+        biomass_below_other,
+        area,
+        na.rm = TRUE
+      ),
+    
+    weighted_biomass_below_urban =
+      weighted_mean_lc(
+        biomass_below_urban,
+        area_urban
+      ),
+    
     .groups = "drop"
   )
-
 
 # ============================================================
 # 13. National carbon-stock averages
 # ============================================================
+
+# ESA-CCI 2010 land-cover area is used as the weight for
+# each land-cover-specific carbon stock.
+#
+# This differs from the previous calculation, where the total
+# area of each 50x50 km grid cell was used as the weight for
+# all land-cover classes.
+
+
+
+
 
 absolute_level <- grid50 %>%
   group_by(
     iso3
   ) %>%
   summarise(
-    across(
-      all_of(
-        ef_cols
+    
+    # --------------------------------------------------------
+    # SOC
+    # --------------------------------------------------------
+    
+    weighted_soc_cropland =
+      weighted_mean_lc(
+        soc_cropland,
+        area_cropland
       ),
-      ~ weighted.mean(
-        .x,
+    
+    weighted_soc_pasture =
+      weighted_mean_lc(
+        soc_pasture,
+        area_pasture
+      ),
+    
+    # soc_other covers land other than cropland and pasture.
+    # The previous workflow did not distinguish forest,
+    # otherland and urban for SOC.
+    #
+    # Keep the original cell-area weighting here because there
+    # is no one-to-one ESA-CCI land-cover weight corresponding
+    # to soc_other.
+    
+    weighted_soc_other =
+      weighted.mean(
+        soc_other,
         area,
         na.rm = TRUE
       ),
-      .names = "weighted_{.col}"
-    ),
+    
+    
+    # --------------------------------------------------------
+    # Aboveground biomass
+    # --------------------------------------------------------
+    
+    weighted_biomass_above_cropland =
+      weighted_mean_lc(
+        biomass_above_cropland,
+        area_cropland
+      ),
+    
+    weighted_biomass_above_pasture =
+      weighted_mean_lc(
+        biomass_above_pasture,
+        area_pasture
+      ),
+    
+    weighted_biomass_above_forest =
+      weighted_mean_lc(
+        biomass_above_forest,
+        area_forest
+      ),
+    
+    weighted_biomass_above_otherland =
+      weighted_mean_lc(
+        biomass_above_otherland,
+        area_otherland
+      ),
+    
+    # "other" is not one of the FABLE land-cover classes used
+    # in the historical characterization.
+    #
+    # Keep the previous total-cell-area weighting.
+    
+    weighted_biomass_above_other =
+      weighted.mean(
+        biomass_above_other,
+        area,
+        na.rm = TRUE
+      ),
+    
+    weighted_biomass_above_urban =
+      weighted_mean_lc(
+        biomass_above_urban,
+        area_urban
+      ),
+    
+    
+    # --------------------------------------------------------
+    # Belowground biomass
+    # --------------------------------------------------------
+    
+    weighted_biomass_below_cropland =
+      weighted_mean_lc(
+        biomass_below_cropland,
+        area_cropland
+      ),
+    
+    weighted_biomass_below_pasture =
+      weighted_mean_lc(
+        biomass_below_pasture,
+        area_pasture
+      ),
+    
+    weighted_biomass_below_forest =
+      weighted_mean_lc(
+        biomass_below_forest,
+        area_forest
+      ),
+    
+    weighted_biomass_below_otherland =
+      weighted_mean_lc(
+        biomass_below_otherland,
+        area_otherland
+      ),
+    
+    # Same rationale as biomass_above_other.
+    
+    weighted_biomass_below_other =
+      weighted.mean(
+        biomass_below_other,
+        area,
+        na.rm = TRUE
+      ),
+    
+    weighted_biomass_below_urban =
+      weighted_mean_lc(
+        biomass_below_urban,
+        area_urban
+      ),
+    
     .groups = "drop"
   ) %>%
+  
   pivot_longer(
     cols = starts_with(
       "weighted_"
@@ -1024,14 +1406,18 @@ for (i in seq_len(
   )
 )) {
   
-  from_i <- transitions$from[i]
-  to_i   <- transitions$to[i]
+  from_i <- as.character(
+    transitions$from[[i]]
+  )
   
-  d <- transition_total_maps %>%
-    filter(
-      from == from_i,
-      to == to_i
-    )
+  to_i <- as.character(
+    transitions$to[[i]]
+  )
+  
+  d <- transition_total_maps[
+    transition_total_maps$from == from_i &
+      transition_total_maps$to == to_i,
+  ]
   
   if (
     all(
@@ -1042,7 +1428,6 @@ for (i in seq_len(
   ) {
     next
   }
-  
   
   p <- ggplot(
     d,
@@ -1172,14 +1557,18 @@ for (iso3_i in countries_to_map) {
     )
   )) {
     
-    from_i <- transitions_country$from[i]
-    to_i   <- transitions_country$to[i]
+    from_i <- as.character(
+      transitions_country$from[[i]]
+    )
     
-    d <- country_maps %>%
-      filter(
-        from == from_i,
-        to == to_i
-      )
+    to_i <- as.character(
+      transitions_country$to[[i]]
+    )
+    
+    d <- transition_total_maps[
+      transition_total_maps$from == from_i &
+        transition_total_maps$to == to_i,
+    ]
     
     if (all(is.na(d$ef_biomass))) {
       next
@@ -1202,7 +1591,7 @@ for (iso3_i in countries_to_map) {
         mid = "white",
         high = "red",
         midpoint = 0,
-        limits = ef_limits,
+        limits = c(-110,110),#ef_limits,
         breaks = ef_breaks,
         oob = scales::squish
       ) +
@@ -1251,6 +1640,7 @@ for (iso3_i in countries_to_map) {
     )
   }
 }
+
 
 # ============================================================
 # 18.b Country transition matrices of biomass emission factors
@@ -1384,7 +1774,7 @@ for (iso3_i in countries_to_map) {
       mid = "white",
       high = "red",
       midpoint = 0,
-      limits = matrix_limits,
+      limits = c(-110, 110),#matrix_limits,
       breaks = matrix_breaks,
       oob = scales::squish
     ) +
@@ -1519,6 +1909,7 @@ for (iso3_i in countries_to_map) {
     iso3_i
   )
 }
+
 
 # ============================================================
 # 19. Export tables and R objects
